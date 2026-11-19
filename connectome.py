@@ -1,4 +1,4 @@
-
+# loading the 124 projection neurons, 2,597 kenyon cells, and 48 mushroom body output neurons
 from pathlib import Path
 import pandas as pd
 import torch
