@@ -10,7 +10,7 @@ def odor(w, seed, noise=0):
 
     if noise:
         g.manual_seed(seed * 1000 + noise + 100000)
-        pn[:3] = torch.randperm(w.size(0), generator=g)[:3]
+        pn[:4] = torch.randperm(w.size(0), generator=g)[:4]
 
     drive = w[pn].sum(0)
     x = torch.zeros(w.size(1))
@@ -18,64 +18,84 @@ def odor(w, seed, noise=0):
     return x
 
 
-def accuracy(m, x, y):
-    return (m.predict(x) == y[:, None]).float().mean().item()
+def measure(s):
+    a, b = s[::2], s[1::2]
+    acc = ((a > b).float() + 0.5 * (a == b).float()).mean().item()
+    margin = (a - b).mean().item()
+    return acc, margin
 
 
-def run(w, x, test, y, lr):
-    m = Memory(w, lr)
-    before = accuracy(m, test[:10], y[:10])
+def recall(m, x, cues):
+    state = m.active.clone()
+    scores = []
 
-    for _ in range(2):
-        for i in range(10):
-            m.learn(x[i], int(y[i]))
+    for xi, ci in zip(x, cues):
+        m.forget()
+        m.remind(ci)
+        scores.append(m.score(xi))
 
-    learned = accuracy(m, test[:10], y[:10])
+    m.active = state
+    return torch.stack(scores)
 
-    for _ in range(2):
-        for i in range(10, 20):
-            m.learn(x[i], int(y[i]))
 
-    retained = accuracy(m, test[:10], y[:10])
-    new = accuracy(m, test[10:], y[10:])
-    return before, learned, retained, new
+def run(pn_kc, kc_mb, seed):
+    ids = [100 * seed + i for i in range(20)]
+    train = torch.stack([odor(pn_kc, i) for i in ids])
+    cue = torch.stack([odor(pn_kc, i, 1) for i in ids])
+    test = torch.stack([odor(pn_kc, i, 2) for i in ids])
+    m = Memory(kc_mb)
+
+    for _ in range(3):
+        for x in train[::2]:
+            m.learn(x)
+
+    learned = measure(m.score(test))[0]
+    m.forget()
+    forgotten = measure(m.score(test))[0]
+    recovered = recall(m, test, cue)
+    wrong = recall(m, test, cue.roll(1, 0))
+
+    hidden = m.silent.clone()
+    m.lesion()
+    targeted = recall(m, test, cue)
+
+    m.silent = hidden.clone()
+    m.lesion(seed)
+    random = recall(m, test, cue)
+
+    m.silent = m.s0.clone()
+    erased = recall(m, test, cue)
+
+    return [
+        learned, forgotten, measure(recovered)[0],
+        measure(wrong)[0], measure(erased)[0],
+        measure(recovered)[1], measure(targeted)[1],
+        measure(random)[1]
+    ]
 
 
 def main():
     pn_kc, kc_mb = load()
     pn_kc /= pn_kc.sum(0).clamp_min(1)
-
-    results = {"real": [], "shuffled": [], "no learning": []}
+    results = {"real": [], "shuffled": []}
 
     for seed in range(30):
-        ids = [seed * 100 + i for i in range(20)]
-        x = torch.stack([odor(pn_kc, s) for s in ids])
-        test = torch.stack([
-            torch.stack([odor(pn_kc, s, j) for j in range(1, 4)])
-            for s in ids
-        ])
-        y = torch.arange(20) % 2
-
         g = torch.Generator().manual_seed(seed)
-        shuffled = kc_mb[torch.randperm(kc_mb.size(0), generator=g)]
+        shuffled = kc_mb[torch.randperm(len(kc_mb), generator=g)]
 
-        for name, w, lr in [
-            ("real", kc_mb, 0.15),
-            ("shuffled", shuffled, 0.15),
-            ("no learning", kc_mb, 0),
-        ]:
-            results[name].append(run(w, x, test, y, lr))
+        for name, w in [("real", kc_mb), ("shuffled", shuffled)]:
+            results[name].append(run(pn_kc, w, seed))
 
-    print("\n             before  learned  retained  new")
-    for name, values in results.items():
-        avg = torch.tensor(values).mean(0) * 100
-        print(f"{name:<12} " + "  ".join(f"{v:5.1f}%" for v in avg))
+    print("\n            learned  forgotten  recovered  wrong cue  no trace")
 
-    real = torch.tensor(results["real"])
-    shuffled = torch.tensor(results["shuffled"])
-    diff = real[:, 2] - shuffled[:, 2]
-    se = diff.std() / len(diff) ** 0.5
-    print(f"\nretention difference: {diff.mean():+.1%} +/- {1.96 * se:.1%}")
+    for name, runs in results.items():
+        avg = torch.tensor(runs).mean(0)
+        print(f"{name:<12}" + "".join(f"{v:10.1%}" for v in avg[:5]))
+        print(f"  recovery margin: {avg[5]:.3f} | targeted lesion: {avg[6]:.3f} | random lesion: {avg[7]:.3f}")
+
+    a, b = map(lambda k: torch.tensor(results[k])[:, 2], results)
+    diff = a - b
+    print(f"\nreal - shuffled recovery: {diff.mean():+.1%} +/- {1.96 * diff.std() / len(diff)**0.5:.1%}")
 
 
 if __name__ == "__main__":
