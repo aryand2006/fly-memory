@@ -9,17 +9,19 @@ class Memory:
         self.delta = torch.zeros_like(w)
         self.lr = lr
 
-    def logits(self, x, lesion=None):
-        s = x @ (self.scale * self.delta)
-        if lesion is not None:
-            s[..., lesion] = 0
-        return s
+    def logits(self, x):
+        return x @ (self.scale * self.delta)
 
-    def predict(self, x, lesion=None):
-        return self.logits(x, lesion).argmax(-1)
+    def predict(self, x):
+        return self.logits(x).argmax(-1)
 
-    def learn(self, x, y):
+    def learn(self, x, y, freeze=None):
         p = self.logits(x).softmax(-1)
         target = F.one_hot(torch.tensor(y), 2).float()
         error = target - p
-        self.delta += self.lr * x[:, None] * self.scale * error / x.sum()
+        update = self.lr * x[:, None] * self.scale * error / x.sum()
+
+        if freeze is not None:
+            update[freeze] = 0
+
+        self.delta += update

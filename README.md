@@ -59,3 +59,11 @@ tested activity-matched shuffling, other mbon pairs, and selective removal of hi
 **result:** real wiring achieved 80.3% joint memory accuracy versus 69.2% for random wiring, but 78.6% for activity-matched wiring. the matched shuffle changed 93.9% of connected kc rows. targeted lesions unexpectedly improved accuracy to 84.7%.
 
 **takeaway:** the original advantage may depend more on activity-connectivity relationships than exact wiring. selective suppression might reduce interference, but we still need strength-matched controls.
+
+### 7. can protecting vulnerable synapses prevent forgetting?
+
+identified kenyon cells supporting old memories that were also active during conflicting learning. protected their synaptic updates and compared targeted, matched, random, and importance-based protection across 50 seeds.
+
+**result:** real wiring achieved 80.8% joint accuracy without protection, 78.5% with targeted protection, and 79.5% with matched protection. importance-based protection improved old memory but significantly hurt new learning.
+
+**takeaway:** selective freezing didn't improve memory. protecting old information alone creates a tradeoff with learning new things. the next question is whether we can identify genuinely conflicting updates instead of simply protecting important connections.

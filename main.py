@@ -45,157 +45,154 @@ def patterns(w, seed):
     return train, test, y
 
 
-def accuracy(p, y):
-    return (p == y).float().mean().item()
+
+def masks(m, train, y, seed):
+    d = m.scale * m.delta
+    sign = 1 - 2 * y.float()
+    support = ((train[0].T @ sign) * (d[:, 0] - d[:, 1])).clamp_min(0)
+
+    freq = train[1].sum(0)
+    overlap = (train[0] * train[1]).sum(0)
+    ids = ((support > 0) & (freq > 0)).nonzero().flatten()
+
+    q = torch.tensor([0.25, 0.5, 0.75])
+    bins = (
+        4 * torch.bucketize(support, torch.quantile(support[ids], q))
+        + torch.bucketize(freq, torch.quantile(freq[ids], q))
+    )
+
+    g = torch.Generator().manual_seed(seed + 5000)
+    target, matched = [], []
+
+    for k in bins[ids].unique():
+        pool = ids[bins[ids] == k]
+        n = max(1, len(pool) // 10)
+
+        target.append(pool[overlap[pool].topk(n).indices])
+        matched.append(pool[torch.randperm(len(pool), generator=g)[:n]])
+
+    target = torch.cat(target)
+    matched = torch.cat(matched)
+    n = len(target)
+
+    important = ids[support[ids].topk(n).indices]
+    random = ids[torch.randperm(len(ids), generator=g)[:n]]
+
+    def mask(indices):
+        x = torch.zeros(len(support), dtype=torch.bool)
+        x[indices] = True
+        return x
+
+    budget = support * freq
+    ratio = (budget[target].sum() /
+             budget[matched].sum().clamp_min(1e-9)).item()
+
+    return {
+        "baseline": None,
+        "targeted": mask(target),
+        "matched": mask(matched),
+        "important": mask(important),
+        "random": mask(random)
+    }, (n, ratio)
 
 
-def both(m, test, y):
-    return ((m.predict(test[0]) == y) &
-            (m.predict(test[1]) == 1 - y)).float().mean().item()
-
-
-def train_model(w, train, test, y, seed):
+def run(w, train, test, y, seed):
     m = Memory(w)
     g = torch.Generator().manual_seed(seed)
 
-    for c in range(2):
-        target = y if c == 0 else 1 - y
+    for _ in range(12):
+        for i in torch.randperm(12, generator=g):
+            m.learn(train[0, i], int(y[i]))
+
+    before = (m.predict(test[0]) == y).float().mean()
+    variants, diagnostic = masks(m, train, y, seed)
+    results = {}
+
+    for name, freeze in variants.items():
+        t = Memory(w)
+        t.delta = m.delta.clone()
+        g = torch.Generator().manual_seed(seed + 10000)
+
         for _ in range(12):
             for i in torch.randperm(12, generator=g):
-                m.learn(train[c, i], int(target[i]))
+                t.learn(train[1, i], int(1 - y[i]), freeze)
 
-        if c == 0:
-            before = accuracy(m.predict(test[0]), y)
+        a = t.predict(test[0]) == y
+        b = t.predict(test[1]) == 1 - y
 
-    a, b = m.predict(test[0]), m.predict(test[1])
-    scores = torch.tensor([
-        before,
-        accuracy(a, y),
-        accuracy(b, 1 - y),
-        ((a == y) & (b == 1 - y)).float().mean().item()
-    ])
-    return m, scores
+        results[name] = torch.tensor([
+            before,
+            a.float().mean(),
+            b.float().mean(),
+            (a & b).float().mean()
+        ])
 
-
-def shuffle(w, freq, seed, matched=False):
-    g = torch.Generator().manual_seed(seed)
-
-    if not matched:
-        return w[torch.randperm(len(w), generator=g)]
-
-    perm = torch.arange(len(w))
-    for f in freq.unique(dim=0):
-        ids = (freq == f).all(1).nonzero().flatten()
-        perm[ids] = ids[torch.randperm(len(ids), generator=g)]
-
-    return w[perm]
+    return results, diagnostic
 
 
-def lesions(m, train, test, y, seed):
-    activity = train.mean((0, 1))
-    ids = ((activity > 0) & (m.scale.sum(1) > 0)).nonzero().flatten()
-    n = max(1, len(ids) // 10)
-
-    importance = activity[ids] * m.scale[ids].sum(1)
-    targeted = ids[importance.topk(n).indices]
-
-    g = torch.Generator().manual_seed(seed + 2000)
-    random = ids[torch.randperm(len(ids), generator=g)[:n]]
-
-    saved = m.scale.clone()
-    scores = []
-
-    for cut in (targeted, random):
-        m.scale[cut] = 0
-        scores.append(both(m, test, y))
-        m.scale = saved.clone()
-
-    return scores
-
-
-def matched_pairs(w, names):
-    ref = [names.index("MBON11"), names.index("MBON18")]
-    stats = torch.stack([w.sum(0), (w > 0).sum(0)], dim=1).float()
-    used = set(ref)
-    pairs = [("real", ref)]
-
-    for k in range(2):
-        pair = []
-        for j in ref:
-            dist = ((stats - stats[j]).abs() /
-                    stats[j].clamp_min(1)).sum(1)
-
-            for idx in used:
-                dist[idx] = float("inf")
-
-            pick = int(dist.argmin())
-            pair.append(pick)
-            used.add(pick)
-
-        pairs.append((f"other pair {k + 1}", pair))
-
-    return pairs
+def interval(x):
+    return f"{x.mean():+.1%} +/- {1.96 * x.std() / len(x)**0.5:.1%}"
 
 
 def main():
     pn_kc, kc_mb, names = load()
     pn_kc /= pn_kc.sum(0).clamp_min(1)
-    pairs = matched_pairs(kc_mb, names)
 
-    for label, pair in pairs:
-        print(f"{label}: {names[pair[0]]}, {names[pair[1]]}")
+    pair = [names.index("MBON11"), names.index("MBON18")]
+    real = kc_mb[:, pair]
 
-    results = {k: [] for k in [
-        "real", "shuffled", "activity matched",
-        "other pair 1", "other pair 2"
-    ]}
-    cuts = []
+    variants = ["baseline", "targeted", "matched", "important", "random"]
+    results = {
+        k: {v: [] for v in variants}
+        for k in ["real", "shuffled"]
+    }
+    diagnostics = []
 
-    for seed in range(30):
+    for seed in range(50):
         train, test, y = patterns(pn_kc, seed)
-        freq = train.sum(1).T
-        real = kc_mb[:, pairs[0][1]]
 
-        if seed == 0:
-            sh = shuffle(real, freq, seed + 1000, True)
-            used = (real != 0).any(1)
-            changed = (sh[used] != real[used]).any(1).float().mean()
-            print(f"matched shuffle changed {changed:.1%} of connected KC rows")
-            print("mbon pairs:", pairs)
+        g = torch.Generator().manual_seed(seed + 2000)
+        shuffled = real[torch.randperm(len(real), generator=g)]
 
-        variants = [
-            ("real", real),
-            ("shuffled", shuffle(real, freq, seed + 1000)),
-            ("activity matched", shuffle(real, freq, seed + 1000, True)),
-            ("other pair 1", kc_mb[:, pairs[1][1]]),
-            ("other pair 2", kc_mb[:, pairs[2][1]])
-        ]
+        for name, w in [("real", real), ("shuffled", shuffled)]:
+            out, diag = run(w, train, test, y, seed)
 
-        for label, w in variants:
-            m, scores = train_model(w, train, test, y, seed)
-            results[label].append(scores)
+            for v in variants:
+                results[name][v].append(out[v])
 
-            if label == "real":
-                cuts.append(lesions(m, train, test, y, seed))
+            if name == "real":
+                diagnostics.append(diag)
 
-    print("\nmodel              before     old     new    both")
-    for label, values in results.items():
-        a = torch.stack(values).mean(0)
-        print(f"{label:<18}" +
-              " ".join(f"{v:7.1%}" for v in a))
+    for name in results:
+        print(f"\n{name} wiring")
+        print("condition         before     old     new    both")
 
-    a = torch.stack(results["real"])
+        for v in variants:
+            a = torch.stack(results[name][v]).mean(0)
+            print(f"{v:<17}" + " ".join(f"{x:7.1%}" for x in a))
 
-    for label in list(results)[1:]:
-        b = torch.stack(results[label])
-        diff = a[:, 3] - b[:, 3]
-        ci = 1.96 * diff.std() / len(diff) ** 0.5
-        print(f"real - {label} (both): {diff.mean():+.1%} +/- {ci:.1%}")
+        targeted = torch.stack(results[name]["targeted"])
+        matched = torch.stack(results[name]["matched"])
+        baseline = torch.stack(results[name]["baseline"])
 
-    cuts = torch.tensor(cuts).mean(0)
-    print(f"\nreal both before lesions: {a[:, 3].mean():.1%}")
-    print(f"targeted lesion: {cuts[0]:.1%}")
-    print(f"random lesion:   {cuts[1]:.1%}")
+        print("targeted - matched (both):",
+              interval(targeted[:, 3] - matched[:, 3]))
+        print("targeted - baseline (both):",
+              interval(targeted[:, 3] - baseline[:, 3]))
+        print("targeted - matched (new):",
+              interval(targeted[:, 2] - matched[:, 2]))
+
+    def gain(name):
+        a = torch.stack(results[name]["targeted"])
+        b = torch.stack(results[name]["matched"])
+        return a[:, 3] - b[:, 3]
+
+    print("\nextra targeted benefit from real wiring:",
+          interval(gain("real") - gain("shuffled")))
+
+    d = torch.tensor(diagnostics)
+    print(f"\nprotected KCs: {d[:, 0].mean():.0f} on average")
+    print(f"target/matched protection budget: {d[:, 1].mean():.2f}x")
 
 
 if __name__ == "__main__":
