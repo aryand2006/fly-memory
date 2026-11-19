@@ -36,8 +36,10 @@ added active and silent traces, reset the active one, then tried recovering it f
 
 **takeaway:** the recovery mechanism works, but we programmed the forgetting and recovery rule ourselves. we haven't discovered biological recovery yet.
 
-### 4. can memories survive interference? (next)
+### 4. can memories survive interference?
 
-learn associations, introduce conflicting experiences, then see if partial cues can recover old memories without retraining. compare real wiring, shuffled wiring, and targeted circuit lesions.
+trained two memory pathways on 12 associations, then introduced conflicting experiences and tested whether partial reminders could recover old memories without retraining.
 
-**status:** not run yet.
+**result:** real wiring went from 99.2% learned to 17.2% after interference, then recovered to 37.5%. shuffled wiring recovered from 12.2% to 31.9%. the extra recovery from real wiring was just +0.6 ± 3.9 percentage points.
+
+**takeaway:** the slow memory pathway helped reduce interference, but real biological wiring didn't show a convincing advantage. recovery was still below chance, and the mechanism was engineered rather than discovered.
