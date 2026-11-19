@@ -51,3 +51,11 @@ used real flywire connections to mbon11 and mbon18. trained 12 odors with one se
 **result:** real wiring retained 85.3% of old associations versus 75.3% for shuffled wiring. new-context accuracy was 91.7% versus 90.6%. real wiring showed a +10.0 ± 5.2 percentage point advantage in old-memory retention.
 
 **takeaway:** our first promising advantage from real biological wiring. still preliminary — need to check whether it comes from meaningful circuit structure or simpler connectivity differences.
+
+### 6. is the biological wiring actually responsible?
+
+tested activity-matched shuffling, other mbon pairs, and selective removal of highly connected neurons.
+
+**result:** real wiring achieved 80.3% joint memory accuracy versus 69.2% for random wiring, but 78.6% for activity-matched wiring. the matched shuffle changed 93.9% of connected kc rows. targeted lesions unexpectedly improved accuracy to 84.7%.
+
+**takeaway:** the original advantage may depend more on activity-connectivity relationships than exact wiring. selective suppression might reduce interference, but we still need strength-matched controls.
