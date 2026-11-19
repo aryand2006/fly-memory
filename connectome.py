@@ -1,4 +1,4 @@
-# loading the 124 projection neurons, 2,597 kenyon cells, and 48 mushroom body output neurons
+
 from pathlib import Path
 import pandas as pd
 import torch
@@ -9,7 +9,8 @@ def load():
     d = FlyWireFAFB().data
     path = Path.home() / ".cache/flywire_gnn/annotations_v783.tsv"
     a = pd.read_csv(path, sep="\t", usecols=[
-        "root_id", "side", "cell_class", "cell_sub_class", "top_nt"
+        "root_id", "side", "cell_class", "cell_sub_class",
+        "top_nt", "hemibrain_type"
     ])
     a = a[a.side == "right"]
 
@@ -20,7 +21,14 @@ def load():
                   (b.top_nt == "acetylcholine")]
         return torch.tensor(sorted(b.root_id), dtype=torch.long)
 
-    pn, kc, mb = ids("ALPN"), ids("Kenyon_Cell"), ids("MBON")
+    pn, kc = ids("ALPN"), ids("Kenyon_Cell")
+    mb = a[(a.cell_class == "MBON") &
+           a.hemibrain_type.isin(["MBON11", "MBON18"])]
+
+    assert len(mb) == 2, "expected MBON11 and MBON18"
+    mid = torch.tensor(sorted(mb.root_id), dtype=torch.long)
+    names = mb.set_index("root_id").loc[mid.tolist(), "hemibrain_type"].tolist()
+
     u, v = d.edge_index
 
     def matrix(src, dst):
@@ -31,5 +39,5 @@ def load():
         w.index_put_((i, j), d.edge_attr[mask, 0].expm1(), accumulate=True)
         return w
 
-    print(f"PNs: {len(pn)}, KCs: {len(kc)}, MBONs: {len(mb)}")
-    return matrix(pn, kc), matrix(kc, mb)
+    print(f"PNs: {len(pn)}, KCs: {len(kc)}, MBONs: {names}")
+    return matrix(pn, kc), matrix(kc, mid), names

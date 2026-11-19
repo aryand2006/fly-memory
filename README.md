@@ -43,3 +43,11 @@ trained two memory pathways on 12 associations, then introduced conflicting expe
 **result:** real wiring went from 99.2% learned to 17.2% after interference, then recovered to 37.5%. shuffled wiring recovered from 12.2% to 31.9%. the extra recovery from real wiring was just +0.6 ± 3.9 percentage points.
 
 **takeaway:** the slow memory pathway helped reduce interference, but real biological wiring didn't show a convincing advantage. recovery was still below chance, and the mechanism was engineered rather than discovered.
+
+### 5. can the same odor hold two conflicting memories?
+
+used real flywire connections to mbon11 and mbon18. trained 12 odors with one set of associations, reversed them in a different context, then tested whether both memories could still be retrieved.
+
+**result:** real wiring retained 85.3% of old associations versus 75.3% for shuffled wiring. new-context accuracy was 91.7% versus 90.6%. real wiring showed a +10.0 ± 5.2 percentage point advantage in old-memory retention.
+
+**takeaway:** our first promising advantage from real biological wiring. still preliminary — need to check whether it comes from meaningful circuit structure or simpler connectivity differences.
