@@ -75,3 +75,11 @@ built a recurrent, plastic mushroom body circuit using 2,934 real neurons. place
 **result:** across 153,600 training episodes, the real circuit achieved 85.9% final accuracy and 66.4% retention. matched random wiring and a linear rl agent performed similarly. slow memory helped against decay but didn't outperform persistent weights.
 
 **takeaway:** adding biological complexity isn't enough. our engineered dynamics still limit what the network can do. instead of guessing how the brain should learn, let's use ml to discover how it could learn.
+
+### 9. can a brain learn how to learn?
+
+used evolutionary search to optimize plasticity, recurrent dynamics, and memory timescales across simulated lifetimes. tested the resulting rules on unseen environments.
+
+**result:** the larger search improved online learning from 56.8% to 84.3%, but retention fell to 26.1%. matched random wiring performed similarly, while conventional associative memory retained 99.5%.
+
+**takeaway:** the optimizer discovered rapid adaptation rather than durable memory. biological wiring and recurrent dynamics weren't enough to overcome the architecture's limitations. shifting toward distributed associative memory, sparse representations, and direct applications to ai.
