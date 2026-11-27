@@ -1,198 +1,183 @@
 
-import torch
+import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+
+import sys
+import numpy as np
 from connectome import load
-from model import Memory
+from brain import Brain
+from world import World
+from agents import Linear, Tabular, controls
 
 
-def mutate(v, n, pool, g):
-    available = pool[~torch.isin(pool, v)]
-    return torch.cat([
-        available[torch.randperm(len(available), generator=g)[:n]],
-        v[n:]
+def choose(q, eps, rng):
+    if rng.random() < eps:
+        return int(rng.integers(2))
+
+    best = np.flatnonzero(q == q.max())
+    return int(rng.choice(best))
+
+
+def episode(agent, world, c, l, rng, eps=0,
+            learn=False, noise=0, blind=False):
+    agent.reset()
+    cue = 4 if blind else c
+
+    ids = world.features[cue, l, 0, noise]
+    q, r1 = agent.values(ids, (cue, l, 0))
+    a = choose(q, eps, rng)
+
+    node = 1 + a
+    ids = world.features[cue, l, node, noise]
+    q, r2 = agent.values(ids, (cue, l, node))
+    b = choose(q, eps, rng)
+
+    reward = world.reward(c, l, a, b)
+
+    if learn:
+        agent.learn([(r1, a), (r2, b)], reward)
+
+    return float(reward > 0)
+
+
+def probe(agent, world, contexts, seed,
+          noisy=False, blind=False):
+    rng = np.random.default_rng(seed)
+    scores = []
+
+    for c in contexts:
+        for l in range(world.landmarks):
+            for n in ([1, 2] if noisy else [0]):
+                scores.append(episode(
+                    agent, world, c, l, rng,
+                    noise=n, blind=blind
+                ))
+
+    return np.mean(scores)
+
+
+def run(agent, world, seed, episodes):
+    rng = np.random.default_rng(seed)
+    seen = set()
+
+    initial = []
+    returning = []
+    retention = []
+    learning = []
+
+    for block, c in enumerate(world.schedule):
+        scores = []
+        repeated = c in seen
+
+        for t in range(episodes):
+            l = int(rng.integers(world.landmarks))
+            eps = max(0.08, 0.35 * (1 - t / episodes))
+
+            scores.append(episode(
+                agent, world, c, l, rng,
+                eps=eps, learn=True
+            ))
+
+        early = np.mean(scores[:24])
+
+        if repeated:
+            returning.append(early)
+        else:
+            initial.append(early)
+
+        learning.append(np.mean(scores[-48:]))
+
+        previous = sorted(seen - {c})
+
+        if previous:
+            retention.append(probe(
+                agent, world, previous,
+                seed + block + 10000
+            ))
+
+        seen.add(c)
+
+    contexts = list(range(world.contexts))
+
+    return np.array([
+        np.mean(initial),
+        np.mean(returning),
+        np.mean(learning),
+        np.mean(retention),
+        probe(agent, world, contexts, seed + 20000),
+        probe(agent, world, contexts, seed + 30000, noisy=True),
+        probe(agent, world, contexts, seed + 40000, blind=True)
     ])
-
-
-def encode(w, pn, ctx):
-    drive = w[torch.cat([pn, ctx])].sum(0)
-    x = torch.zeros(w.size(1))
-    x[drive.topk(w.size(1) // 20).indices] = 1
-    return x
-
-
-def patterns(w, seed):
-    g = torch.Generator().manual_seed(seed)
-    order = torch.randperm(w.size(0), generator=g)
-    ctx = order[:16].reshape(2, 8)
-    pool = order[16:]
-
-    odors = [
-        pool[torch.randperm(len(pool), generator=g)[:16]]
-        for _ in range(12)
-    ]
-    noisy = [mutate(p, 2, pool, g) for p in odors]
-    noisy_ctx = [mutate(c, 1, pool, g) for c in ctx]
-
-    train = torch.stack([
-        torch.stack([encode(w, p, c) for p in odors])
-        for c in ctx
-    ])
-    test = torch.stack([
-        torch.stack([encode(w, p, c) for p in noisy])
-        for c in noisy_ctx
-    ])
-
-    y = torch.randperm(12, generator=g) % 2
-    return train, test, y
-
-
-
-def masks(m, train, y, seed):
-    d = m.scale * m.delta
-    sign = 1 - 2 * y.float()
-    support = ((train[0].T @ sign) * (d[:, 0] - d[:, 1])).clamp_min(0)
-
-    freq = train[1].sum(0)
-    overlap = (train[0] * train[1]).sum(0)
-    ids = ((support > 0) & (freq > 0)).nonzero().flatten()
-
-    q = torch.tensor([0.25, 0.5, 0.75])
-    bins = (
-        4 * torch.bucketize(support, torch.quantile(support[ids], q))
-        + torch.bucketize(freq, torch.quantile(freq[ids], q))
-    )
-
-    g = torch.Generator().manual_seed(seed + 5000)
-    target, matched = [], []
-
-    for k in bins[ids].unique():
-        pool = ids[bins[ids] == k]
-        n = max(1, len(pool) // 10)
-
-        target.append(pool[overlap[pool].topk(n).indices])
-        matched.append(pool[torch.randperm(len(pool), generator=g)[:n]])
-
-    target = torch.cat(target)
-    matched = torch.cat(matched)
-    n = len(target)
-
-    important = ids[support[ids].topk(n).indices]
-    random = ids[torch.randperm(len(ids), generator=g)[:n]]
-
-    def mask(indices):
-        x = torch.zeros(len(support), dtype=torch.bool)
-        x[indices] = True
-        return x
-
-    budget = support * freq
-    ratio = (budget[target].sum() /
-             budget[matched].sum().clamp_min(1e-9)).item()
-
-    return {
-        "baseline": None,
-        "targeted": mask(target),
-        "matched": mask(matched),
-        "important": mask(important),
-        "random": mask(random)
-    }, (n, ratio)
-
-
-def run(w, train, test, y, seed):
-    m = Memory(w)
-    g = torch.Generator().manual_seed(seed)
-
-    for _ in range(12):
-        for i in torch.randperm(12, generator=g):
-            m.learn(train[0, i], int(y[i]))
-
-    before = (m.predict(test[0]) == y).float().mean()
-    variants, diagnostic = masks(m, train, y, seed)
-    results = {}
-
-    for name, freeze in variants.items():
-        t = Memory(w)
-        t.delta = m.delta.clone()
-        g = torch.Generator().manual_seed(seed + 10000)
-
-        for _ in range(12):
-            for i in torch.randperm(12, generator=g):
-                t.learn(train[1, i], int(1 - y[i]), freeze)
-
-        a = t.predict(test[0]) == y
-        b = t.predict(test[1]) == 1 - y
-
-        results[name] = torch.tensor([
-            before,
-            a.float().mean(),
-            b.float().mean(),
-            (a & b).float().mean()
-        ])
-
-    return results, diagnostic
 
 
 def interval(x):
-    return f"{x.mean():+.1%} +/- {1.96 * x.std() / len(x)**0.5:.1%}"
+    if len(x) < 2:
+        return f"{x.mean():+.1%}"
+
+    ci = 1.96 * x.std(ddof=1) / np.sqrt(len(x))
+    return f"{x.mean():+.1%} +/- {ci:.1%}"
 
 
 def main():
-    pn_kc, kc_mb, names = load()
-    pn_kc /= pn_kc.sum(0).clamp_min(1)
+    seeds = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+    episodes = int(sys.argv[2]) if len(sys.argv) > 2 else 240
 
-    pair = [names.index("MBON11"), names.index("MBON18")]
-    real = kc_mb[:, pair]
+    pk, km, rec, dm = load()
+    results = {}
+    changes = []
 
-    variants = ["baseline", "targeted", "matched", "important", "random"]
-    results = {
-        k: {v: [] for v in variants}
-        for k in ["real", "shuffled"]
-    }
-    diagnostics = []
+    for seed in range(seeds):
+        world = World(pk, seed)
 
-    for seed in range(50):
-        train, test, y = patterns(pn_kc, seed)
+        shuffled, matched, feedback, mod, changed = controls(
+            km, rec, dm, world.features, seed + 1000
+        )
+        changes.append(changed)
 
-        g = torch.Generator().manual_seed(seed + 2000)
-        shuffled = real[torch.randperm(len(real), generator=g)]
+        models = {
+            "real": Brain(km, rec, dm, seed),
+            "shuffled": Brain(shuffled, rec, dm, seed),
+            "matched": Brain(matched, rec, dm, seed),
+            "rewired feedback": Brain(km, feedback, mod, seed),
+            "no feedback": Brain(km, rec, dm, seed, "no feedback"),
+            "no dopamine": Brain(km, rec, dm, seed, "no dopamine"),
+            "no slow": Brain(km, rec, dm, seed, "no slow"),
+            "persistent": Brain(km, rec, dm, seed, "persistent"),
+            "linear": Linear(len(km)),
+            "tabular": Tabular()
+        }
 
-        for name, w in [("real", real), ("shuffled", shuffled)]:
-            out, diag = run(w, train, test, y, seed)
+        for name, agent in models.items():
+            score = run(agent, world, seed + 5000, episodes)
+            results.setdefault(name, []).append(score)
 
-            for v in variants:
-                results[name][v].append(out[v])
+        print(f"seed {seed + 1}/{seeds} complete", flush=True)
 
-            if name == "real":
-                diagnostics.append(diag)
+    results = {k: np.stack(v) for k, v in results.items()}
 
-    for name in results:
-        print(f"\n{name} wiring")
-        print("condition         before     old     new    both")
+    print("\nmodel              first  return   learn  retain   final   noisy   blind")
 
-        for v in variants:
-            a = torch.stack(results[name][v]).mean(0)
-            print(f"{v:<17}" + " ".join(f"{x:7.1%}" for x in a))
+    for name, scores in results.items():
+        print(f"{name:<19}" + " ".join(
+            f"{v:6.1%}" for v in scores.mean(0)
+        ))
 
-        targeted = torch.stack(results[name]["targeted"])
-        matched = torch.stack(results[name]["matched"])
-        baseline = torch.stack(results[name]["baseline"])
+    real = results["real"]
 
-        print("targeted - matched (both):",
-              interval(targeted[:, 3] - matched[:, 3]))
-        print("targeted - baseline (both):",
-              interval(targeted[:, 3] - baseline[:, 3]))
-        print("targeted - matched (new):",
-              interval(targeted[:, 2] - matched[:, 2]))
+    print("\npaired comparisons (real - control)")
 
-    def gain(name):
-        a = torch.stack(results[name]["targeted"])
-        b = torch.stack(results[name]["matched"])
-        return a[:, 3] - b[:, 3]
+    for name, scores in results.items():
+        if name == "real":
+            continue
 
-    print("\nextra targeted benefit from real wiring:",
-          interval(gain("real") - gain("shuffled")))
+        print(f"\n{name}")
+        print("retention:", interval(real[:, 3] - scores[:, 3]))
+        print("final:    ", interval(real[:, 4] - scores[:, 4]))
+        print("noisy:    ", interval(real[:, 5] - scores[:, 5]))
 
-    d = torch.tensor(diagnostics)
-    print(f"\nprotected KCs: {d[:, 0].mean():.0f} on average")
-    print(f"target/matched protection budget: {d[:, 1].mean():.2f}x")
+    print(f"\nactivity-matched rows changed: {np.mean(changes):.1%}")
 
 
 if __name__ == "__main__":

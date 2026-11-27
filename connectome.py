@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import torch
 from flywire_gnn import FlyWireFAFB
@@ -8,34 +9,60 @@ from flywire_gnn import FlyWireFAFB
 def load():
     d = FlyWireFAFB().data
     path = Path.home() / ".cache/flywire_gnn/annotations_v783.tsv"
-    a = pd.read_csv(path, sep="\t", usecols=[
-        "root_id", "side", "cell_class", "cell_sub_class",
-        "top_nt", "hemibrain_type"
-    ], dtype={"hemibrain_type": "string"})
+
+    a = pd.read_csv(path, sep="\t", low_memory=False)
     a = a[a.side == "right"]
 
-    def ids(cls):
-        b = a[a.cell_class == cls]
-        if cls == "ALPN":
-            b = b[(b.cell_sub_class == "uniglomerular") &
-                  (b.top_nt == "acetylcholine")]
-        return torch.tensor(sorted(b.root_id), dtype=torch.long)
+    pn = a[
+        (a.cell_class == "ALPN") &
+        (a.cell_sub_class == "uniglomerular") &
+        (a.top_nt == "acetylcholine")
+    ]
+    kc = a[a.cell_class == "Kenyon_Cell"]
+    mb = a[a.cell_class == "MBON"]
+    dan = a[a.cell_class == "DAN"]
 
-    pn, kc = ids("ALPN"), ids("Kenyon_Cell")
-    mb = a[(a.cell_class == "MBON") &
-           a.hemibrain_type.fillna("").str.startswith("MBON")]
+    groups = [pn, kc, mb, dan]
+    sizes = [len(g) for g in groups]
+    p, k, m, n = sizes
 
-    mid = torch.tensor(sorted(mb.root_id), dtype=torch.long)
-    names = mb.set_index("root_id").loc[mid.tolist(), "hemibrain_type"].tolist()
-    u, v = d.edge_index
+    cells = pd.concat(groups)
+    ids = cells.root_id.to_numpy()
 
-    def matrix(src, dst):
-        mask = torch.isin(d.node_ids[u], src) & torch.isin(d.node_ids[v], dst)
-        i = torch.searchsorted(src, d.node_ids[u[mask]])
-        j = torch.searchsorted(dst, d.node_ids[v[mask]])
-        w = torch.zeros(len(src), len(dst))
-        w.index_put_((i, j), d.edge_attr[mask, 0].expm1(), accumulate=True)
-        return w
+    loc = pd.Index(d.node_ids.numpy()).get_indexer(ids)
+    assert (loc >= 0).all()
 
-    print(f"PNs: {len(pn)}, KCs: {len(kc)}, MBONs: {len(mid)}")
-    return matrix(pn, kc), matrix(kc, mid), names
+    lookup = torch.full((len(d.node_ids),), -1)
+    lookup[torch.from_numpy(loc)] = torch.arange(len(ids))
+
+    u, v = lookup[d.edge_index]
+    keep = (u >= 0) & (v >= 0)
+
+    w = torch.zeros(len(ids), len(ids))
+    w.index_put_(
+        (u[keep], v[keep]),
+        d.edge_attr[keep, 0].expm1().float(),
+        accumulate=True
+    )
+    w = w.numpy()
+
+    pk = w[:p, p:p+k].copy()
+    km = w[p:p+k, p+k:p+k+m].copy()
+    rec = w[p+k:, p+k:].copy()
+    dm = rec[m:, :m].copy()
+
+    pk /= np.maximum(pk.sum(0), 1)
+    dm /= np.maximum(dm.sum(0), 1)
+
+    nt = cells.top_nt.iloc[p+k:].to_numpy()
+    sign = np.where(np.isin(nt, ["gaba", "glutamate"]), -1, 1)
+
+    rec *= sign[:, None]
+    rec /= np.maximum(np.abs(rec).sum(0), 1)
+
+    print(f"PNs: {p}, KCs: {k}, MBONs: {m}, DANs: {n}")
+    print(f"KC -> MBON connections: {np.count_nonzero(km):,}")
+    print(f"recurrent connections: {np.count_nonzero(rec):,}")
+    print(f"DAN -> MBON connections: {np.count_nonzero(dm):,}")
+
+    return pk, km, rec, dm

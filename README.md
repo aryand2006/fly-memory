@@ -67,3 +67,11 @@ identified kenyon cells supporting old memories that were also active during con
 **result:** real wiring achieved 80.8% joint accuracy without protection, 78.5% with targeted protection, and 79.5% with matched protection. importance-based protection improved old memory but significantly hurt new learning.
 
 **takeaway:** selective freezing didn't improve memory. protecting old information alone creates a tradeoff with learning new things. the next question is whether we can identify genuinely conflicting updates instead of simply protecting important connections.
+
+### 8. can a biological circuit learn through experience?
+
+built a recurrent, plastic mushroom body circuit using 2,934 real neurons. placed it in a changing environment where it learns through rewards rather than labels.
+
+**result:** across 153,600 training episodes, the real circuit achieved 85.9% final accuracy and 66.4% retention. matched random wiring and a linear rl agent performed similarly. slow memory helped against decay but didn't outperform persistent weights.
+
+**takeaway:** adding biological complexity isn't enough. our engineered dynamics still limit what the network can do. instead of guessing how the brain should learn, let's use ml to discover how it could learn.
